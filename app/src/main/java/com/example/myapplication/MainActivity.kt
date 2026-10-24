@@ -1119,32 +1119,40 @@ fun ProfileScreen(
                     showEditDialog = true
                 }
 
-                // LOCAL DATA BACKUP & EXPORT (CSV)
+                // LOCAL DATA BACKUP & EXPORT (Direct to mobile Downloads folder)
                 ProfileMenuRow(title = "Backup & Export Data (CSV)", icon = Icons.Default.Refresh) {
                     scope.launch(Dispatchers.IO) {
                         try {
                             val database = AppDatabase.getDatabase(context)
                             val donors = database.donorDao().getAllDonors()
 
-                            val csvFile = File(context.getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "MS_Doner_Backup.csv")
-                            val writer = FileWriter(csvFile)
-                            writer.append("ID,FullName,BloodType,Location,Phone,Age,LastDonationDate,IsEligible\n")
+                            val csvContent = StringBuilder()
+                            csvContent.append("ID,FullName,BloodType,Location,Phone,Age,LastDonationDate,IsEligible\n")
                             for (donor in donors) {
-                                writer.append("${donor.id},${donor.fullName},${donor.bloodType},${donor.location},${donor.phone},${donor.age},${donor.lastDonationDate},${donor.isEligible}\n")
+                                csvContent.append("${donor.id},${donor.fullName},${donor.bloodType},${donor.location},${donor.phone},${donor.age},${donor.lastDonationDate},${donor.isEligible}\n")
                             }
-                            writer.flush()
-                            writer.close()
+
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                val resolver = context.contentResolver
+                                val contentValues = android.content.ContentValues().apply {
+                                    put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, "MS_Doner_Backup.csv")
+                                    put(android.provider.MediaStore.MediaColumns.MIME_TYPE, "text/csv")
+                                    put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH, android.os.Environment.DIRECTORY_DOWNLOADS)
+                                }
+                                val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+                                uri?.let {
+                                    resolver.openOutputStream(it)?.use { outputStream ->
+                                        outputStream.write(csvContent.toString().toByteArray())
+                                    }
+                                }
+                            } else {
+                                val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                                val csvFile = File(downloadsDir, "MS_Doner_Backup.csv")
+                                csvFile.writeText(csvContent.toString())
+                            }
 
                             withContext(Dispatchers.Main) {
-                                Toast.makeText(context, "Backup saved to Documents folder!", Toast.LENGTH_LONG).show()
-
-                                val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", csvFile)
-                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/csv"
-                                    putExtra(Intent.EXTRA_STREAM, uri)
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                }
-                                context.startActivity(Intent.createChooser(shareIntent, "Share Donor Backup"))
+                                Toast.makeText(context, "Backup downloaded successfully to Downloads folder!", Toast.LENGTH_LONG).show()
                             }
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
@@ -1154,7 +1162,7 @@ fun ProfileScreen(
                     }
                 }
 
-                // RESTORE DATA FROM CSV (Using Icons.Default.Check)
+                // RESTORE DATA FROM CSV
                 ProfileMenuRow(title = "Restore Data from CSV", icon = Icons.Default.Check) {
                     restoreFileLauncher.launch(arrayOf("text/csv", "application/comma-separated-values", "*/*"))
                 }
