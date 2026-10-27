@@ -51,7 +51,6 @@ import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
-import java.io.FileWriter
 import java.util.Calendar
 
 class MainActivity : ComponentActivity() {
@@ -98,6 +97,32 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
+
+// ==========================================
+// HELPER: CALCULATE ELIGIBILITY (90-DAY GAP)
+// ==========================================
+fun calculateEligibility(lastDonationDate: String): Boolean {
+    if (lastDonationDate.isBlank() || lastDonationDate == "N/A") return true
+    try {
+        val parts = lastDonationDate.split("-")
+        if (parts.size == 3) {
+            val year = parts[0].toInt()
+            val month = parts[1].toInt() - 1
+            val day = parts[2].toInt()
+
+            val lastCal = Calendar.getInstance().apply {
+                set(year, month, day)
+            }
+            val currentCal = Calendar.getInstance()
+            val diffMillis = currentCal.timeInMillis - lastCal.timeInMillis
+            val diffDays = diffMillis / (1000 * 60 * 60 * 24)
+            return diffDays >= 90 // Standard 3-month cooling period
+        }
+    } catch (e: Exception) {
+        // Fallback
+    }
+    return true
 }
 
 // ==========================================
@@ -220,7 +245,7 @@ fun BottomNavIcon(
 }
 
 // ==========================================
-// 1. DASHBOARD HOME SCREEN
+// 1. DASHBOARD HOME SCREEN & ANALYTICS
 // ==========================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -235,10 +260,14 @@ fun DashboardHomeScreen(
 
     var totalMembers by remember { mutableStateOf(0) }
     var eligibleDonors by remember { mutableStateOf(0) }
+    var districtMap by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
 
     LaunchedEffect(Unit) {
-        totalMembers = donorDao.getTotalDonorCount()
-        eligibleDonors = donorDao.getEligibleDonorCount()
+        val allDonors = donorDao.getAllDonors()
+        totalMembers = allDonors.size
+        eligibleDonors = allDonors.count { calculateEligibility(it.lastDonationDate) }
+        districtMap = allDonors.groupBy { it.location.ifBlank { "Other / Unspecified" } }
+            .mapValues { entry -> entry.value.size }
     }
 
     val bloodGroups = listOf("A+", "A-", "B+", "B-", "AB+", "AB-")
@@ -387,13 +416,14 @@ fun DashboardHomeScreen(
             }
         }
 
+        // CONTRIBUTION & ANALYTICS
         item {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(text = "Our Contribution", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1D2A44))
+                Text(text = "Our Contribution & Analytics", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Color(0xFF1D2A44))
                 TextButton(onClick = onNavigateToDirectory) {
                     Text(text = "See All", color = Color(0xFFB00020), fontSize = 12.sp)
                 }
@@ -402,7 +432,36 @@ fun DashboardHomeScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 ContributionBox("$totalMembers+", "Total Donors", Modifier.weight(1f))
                 ContributionBox("$eligibleDonors", "Eligible Now", Modifier.weight(1f))
-                ContributionBox("38", "TN Districts", Modifier.weight(1f))
+                ContributionBox("${districtMap.size}", "TN Districts", Modifier.weight(1f))
+            }
+        }
+
+        // DISTRICT BREAKDOWN CARD
+        item {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFFFDF7F4)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(text = "📍 District-Wise Registered Donors", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = Color(0xFF1D2A44))
+                    Spacer(modifier = Modifier.height(8.dp))
+                    if (districtMap.isEmpty()) {
+                        Text(text = "No district records yet. Add donors to see analytics.", fontSize = 12.sp, color = Color.Gray)
+                    } else {
+                        districtMap.entries.take(5).forEach { (district, count) ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(text = district, fontSize = 13.sp, color = Color(0xFF1D2A44))
+                                Text(text = "$count Donors", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color(0xFFB00020))
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -462,7 +521,7 @@ fun ContributionBox(value: String, label: String, modifier: Modifier = Modifier)
 }
 
 // ==========================================
-// 2. DONOR DIRECTORY SCREEN
+// 2. DONOR DIRECTORY SCREEN WITH ELIGIBILITY BADGE
 // ==========================================
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -553,6 +612,8 @@ fun DonorDirectoryScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(filteredDonors) { donor ->
+                val isEligible = calculateEligibility(donor.lastDonationDate)
+
                 Card(
                     shape = RoundedCornerShape(12.dp),
                     colors = CardDefaults.cardColors(containerColor = Color(0xFFFDF7F4)),
@@ -577,17 +638,36 @@ fun DonorDirectoryScreen(
                                     Text(text = "📍 ${donor.location} • Age: ${donor.age}", fontSize = 11.sp, color = Color.Gray)
                                 }
                             }
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = Color(0xFFFFEBEE)
+                            Row(
+                                horizontalArrangement = Arrangement.End,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = donor.bloodType,
-                                    color = Color(0xFFB00020),
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                                )
+                                // ELIGIBILITY / COOLING BADGE
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = if (isEligible) Color(0xFFE8F5E9) else Color(0xFFFFEBEE)
+                                ) {
+                                    Text(
+                                        text = if (isEligible) "🟢 Eligible" else "🔴 Cooling",
+                                        color = if (isEligible) Color(0xFF2B9348) else Color(0xFFB00020),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = Color(0xFFFFEBEE)
+                                ) {
+                                    Text(
+                                        text = donor.bloodType,
+                                        color = Color(0xFFB00020),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -873,6 +953,7 @@ fun RegisterDonorScreen(
 
                 if (name.isNotBlank() && bloodType.isNotBlank() && phone.isNotBlank()) {
                     scope.launch {
+                        val isEligibleNow = calculateEligibility(lastDonationDate)
                         val updatedDonor = DonorEntity(
                             id = donorToEdit?.id ?: 0,
                             fullName = name,
@@ -880,7 +961,7 @@ fun RegisterDonorScreen(
                             location = location,
                             phone = phone,
                             lastDonationDate = if (lastDonationDate.isBlank()) "N/A" else lastDonationDate,
-                            isEligible = true,
+                            isEligible = isEligibleNow,
                             age = age
                         )
 
@@ -954,15 +1035,16 @@ fun ProfileScreen(
                     while (line != null) {
                         val tokens = line.split(",")
                         if (tokens.size >= 8) {
+                            val lastDonation = tokens[6]
                             val donor = DonorEntity(
-                                id = 0, // Auto-generate ID to avoid conflict
+                                id = 0,
                                 fullName = tokens[1],
                                 bloodType = tokens[2],
                                 location = tokens[3],
                                 phone = tokens[4],
                                 age = tokens[5].toIntOrNull() ?: 20,
-                                lastDonationDate = tokens[6],
-                                isEligible = tokens[7].toBoolean()
+                                lastDonationDate = lastDonation,
+                                isEligible = calculateEligibility(lastDonation)
                             )
                             dao.insertDonor(donor)
                             count++
@@ -1245,7 +1327,9 @@ fun ProfileMetricBox(label: String, value: String, modifier: Modifier = Modifier
         modifier = modifier
     ) {
         Column(
-            modifier = Modifier.padding(vertical = 10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 10.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(text = label, fontSize = 11.sp, color = Color.Gray)
